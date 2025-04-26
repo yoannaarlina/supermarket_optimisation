@@ -1,0 +1,395 @@
+---
+title: "Supermarket Layout Optimisation"
+author: "Dr Yoanna Arlina Kurnianingsih"
+format:
+  html:
+    toc: true
+    number-sections: true
+    code-fold: true
+---
+
+```{r echo=FALSE}
+# Load the required libraries
+pacman::p_load(tidyverse, arules, arulesViz, seriation, corrplot)
+```
+
+## Project Background
+
+The layout of a supermarket is a critical factor in influencing consumer behaviour and store profitability. Efficiently arranged products can significantly enhance the shopping experience, leading to increased customer satisfaction and sales. This optimisation of supermarket layout not only aims to improve the shopping experience but also seeks to boost the supermarket's operational efficiency and profitability, making it a vital study in the realm of retail management and consumer behaviour analysis.
+
+My project aims to optimise supermarket layout design by employing Market Basket Analysis (MBA) to determine the confidence values between item pairs and to utilise Integer Programming to strategically position items for enhanced shopping efficiency and increased sales.
+
+### Objectives
+
+-   Identify strong associations between supermarket products based on transaction data.
+
+-   Explore ways where Integer Programming be applied to optimise the physical arrangement of products to reflect these associations.
+
+-   Understand the impact of optimised layout—based on product co-occurrence and distance minimisation/maximisation—have on potential shopping efficiency and store performance.
+
+### Data Collection
+
+**Source**: Groceries Market Basket Dataset from [Kaggle](https://www.kaggle.com/datasets/irfanasrullah/groceries)
+
+**Field Study**:
+
+-   **Location**: Cold Storage \@ NUS Kent Vale, Singapore
+-   **Activity**: On-site sketching of the **supermarket layout**
+-   **Purpose**: To complement the dataset by observing **physical product placement** and shopper flow
+
+![](images/clipboard-3746417801.png)
+
+## Data Preparation
+
+Loading the dataset
+
+```{r}
+mba_df <- data.frame(read.csv("data/market_basket_dataset.csv"))
+mba_df <- mba_df %>% mutate_if(is.character,as.factor)
+
+```
+
+```{r}
+# Count and print unique values
+num_items <- length(unique(mba_df$Itemname))
+num_customers <- length(unique(mba_df$CustomerID))
+num_transactions <- length(unique(mba_df$BillNo))
+
+cat("Number of unique items:", num_items, "\n")
+cat("Number of customers:", num_customers, "\n")
+cat("Number of transactions:", num_transactions, "\n")
+
+```
+
+## Market Basket Analysis
+
+Transform data into transactions
+
+```{r}
+data_transform <- function(unique_BillNo) {
+  j <- mba_df[mba_df$BillNo==unique_BillNo,]
+  j2 <- as.vector(j$Itemname)
+  return(j2)
+}
+
+# Creating the list of items in each transaction (bill no)
+baskets.list <-  lapply(unique(mba_df$BillNo), function(x) data_transform(x))
+
+# Transform the object class from list to transactions
+baskets.trans <- as(baskets.list, "transactions") 
+```
+
+Visualise the most frequent items
+
+```{r}
+
+calm_colors <- c("#a6cee3", "#1f78b4", "#b2df8a", "#33a02c", 
+                 "#fb9a99", "#e31a1c", "#fdbf6f", "#ff7f00", 
+                 "#cab2d6", "#6a3d9a", "#ffff99", "#b15928",
+                 "#8dd3c7", "#ffffb3", "#bebada", "#fb8072",
+                 "#80b1d3", "#fdb462", "#b3de69")
+
+# Adjust the length of the color vector to match the number of items
+calm_colors <- calm_colors[1:19]
+
+# Create the item frequency plot with the specified calm colors
+itemFrequencyPlot(baskets.trans, topN = 19, type = "absolute", main = "Item Frequency Plot", col = calm_colors)
+```
+
+Run the apriori algorithm
+
+```{r}
+# Run the apriori algorithm, get the confident value for each pair
+baskets.rules <- apriori(baskets.trans , parameter= list(supp=0, conf=0, target = "rules"), maxlen=2)
+
+#inspect(baskets.rules) #display associations
+```
+
+Extract Rules and Visualised Filtered Rules by Lift
+
+```{r}
+# For exploration
+# Display associations only when lift > 2
+inspect(subset(baskets.rules, lift>2)) 
+# Chicken + Pasta, Tea+Juice, Milk+Oranges seem to have the strongest association
+
+# Data visualisation
+
+plot(subset (baskets.rules , lift > 2.5), method = "graph",  engine = "htmlwidget") # use subset to visualise a subset of the rules
+```
+
+## Correlation and Distance Matrices
+
+Computing the correlation between pairs of items
+
+```{r}
+item_names <- c("Chicken", "Apples", "Tea", "Sugar", "Pasta", "Eggs", "Onions", "Juice", "Yogurt", 
+                "Milk", "Tomatoes", "Bread", "Butter", "Oranges", "Cheese", "Cereal", "Potatoes", 
+                "Coffee", "Bananas")
+
+# Create an empty 19x19 matrix
+confidence_matrix <- matrix(0, nrow = 19, ncol = 19, dimnames = list(item_names, item_names))
+
+# Populate the matrix with confidence values
+for (rule in 20:length(baskets.rules)) {
+    lhs_item <- gsub("[{}]", "", labels(lhs(baskets.rules[rule])))
+    rhs_item <- gsub("[{}]", "", labels(rhs(baskets.rules[rule])))
+    confidence_value <- quality(baskets.rules[rule])$confidence  
+
+    confidence_matrix[lhs_item, rhs_item] <- confidence_value
+}
+```
+
+Visualising the correlation matrix
+
+```{r}
+# Create a distance matrix for hierarchical clustering to visualise the correlation matrix
+rho <- confidence_matrix  # or replace with your own correlation matrix
+
+d <- as.dist(sqrt(2 * (1 - rho)))  # Euclidean-like distance
+
+# Apply seriation
+o <- seriate(d, method = "HC_ward")
+
+# Reorder the matrix
+rho_reordered <- permute(rho, order = c(o, o))
+
+# Plot reordered correlation matrix
+corrplot(rho_reordered,
+         method = "color",
+         col = colorRampPalette(c("red", "white", "blue"))(200),
+         tl.col = "black", tl.srt = 45, is.corr = FALSE,
+         title = "Reordered Confidence Matrix")
+
+# Plot the dendrogram
+plot(hclust(d, method = "ward.D"),
+     main = "Hierarchical Clustering Dendrogram")
+
+```
+
+As the computation will be quite demanding, I decided to select items that are strongly correlated to each other, and/or frequently bought.
+
+**Selected items: Milk, Orange, Pasta, Chicken, Banana, Cereal**
+
+```{r}
+# Choose only Milk, Orange, Pasta, Chicken, Banana, Cereal
+selected <- c("Milk", "Oranges", "Pasta", "Chicken", "Bananas", "Cereal")
+confidence_matrix <- confidence_matrix[selected,selected]
+```
+
+Distance Matrix
+
+```{r}
+# Define the size of the grid
+rows <- 4
+cols <- 5
+
+# Function to calculate Manhattan distance between two positions in the grid
+manhattan_distance <- function(pos1, pos2) {
+  return(abs(pos1[1] - pos2[1]) + abs(pos1[2] - pos2[2]))
+}
+
+# Initialize a 20x20 matrix for distances
+d_matrix_revised <- matrix(0, nrow = rows * cols, ncol = rows * cols)
+
+# Calculate the distance between each pair of positions in the revised grid
+for (i in 1:(rows * cols)) {
+  for (j in 1:(rows * cols)) {
+    # Convert the position in the matrix back to grid coordinates
+    pos_i <- c(((i - 1) %/% cols) + 1, ((i - 1) %% cols) + 1) #11 12 13 14 15
+    pos_j <- c(((j - 1) %/% cols) + 1, ((j - 1) %% cols) + 1)
+    
+    # Calculate the Manhattan distance and assign it to the matrix
+    d_matrix_revised[i, j] <- manhattan_distance(pos_i, pos_j)
+  }
+}
+
+# Choose only 	Milk, Orange, Pasta, Chicken, Banana, Cereal
+selected <- c(18, 4, 12, 20, 6, 11) # this is the coordinate of the location of these items in the supermarket
+d_matrix_revised <- d_matrix_revised[selected,selected]
+```
+
+## Run the Integer Programming
+
+The decision variables are: $$
+x_{ik} = 
+\begin{cases} 
+1 & \text{if product } i \text{ is located at position } k, \\
+0 & \text{else.}
+\end{cases}
+$$
+
+$$
+\\
+x_{jl} = 
+\begin{cases} 
+1 & \text{if product } j \text{ is located at position } l, \\
+0 & \text{else.}
+\end{cases}
+$$
+
+Each pair of produced is weighted by their confidence value. The objective function can be formulated as:
+
+$$
+\sum_{ijkl} x_{ik}x_{jl}d_{kl}c_{ij}
+$$ Cast the problem as a linear by introducing variables yijkl:
+
+$$
+y_{ijkl} \equiv x_{ik} \cdot x_{jl}
+$$
+
+Defined as:
+
+$$
+y_{ijkl} = 
+\begin{cases} 
+1 & \text{if products } i, j \text{ are located at positions } l, k, \text{ respectively,} \\
+0 & \text{else.}
+\end{cases}
+$$
+
+We have two sets of optimisation problems:
+
+1)  Maximising the total distance between products that are strongly correlated
+2)  Maximising the total distance between products that are weakly correlated
+
+```{r}
+# Load the required libraries
+pacman::p_load(ompr, ompr.roi, ROI.plugin.glpk)
+```
+
+### 1) Maximising the total distance between products that are strongly correlated
+
+We want to maximise the total distance such that pairs with higher confidence values are farther from each other.
+
+$$
+\begin{align*}
+\text{maximise} \quad & \sum_{ijlk} y_{ijlk}d_{k}c_{ij} \\
+\text{s.t.} \quad & 2y_{ijlk} \leq x_{ik} + x_{jl}, & \forall i, j, l, k \\
+& \sum_{i} x_{ik} = 1, & \forall k \\
+& \sum_{k} x_{ik} = 1, & \forall i \\
+& y_{ijlk} \in \{0, 1\}, x_{ik} \in \{0, 1\}.
+\end{align*}
+$$
+
+```{r}
+num_items <- nrow(confidence_matrix) # Number of products
+num_positions <- nrow(d_matrix_revised) # Number of positions
+
+model <- MIPModel() %>%
+  # Add decision variables
+  add_variable(x[i, k], i=1:num_items, k=1:num_positions, type="binary") %>%
+  add_variable(y[i, j, l, k], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions, i!=j, k!=l, type="binary") %>%
+
+  # Set the objective function (example form, adjust based on your problem's specifics)
+  set_objective(sum_over(y[i, j, l, k] * d_matrix_revised[k, l] * confidence_matrix[i, j], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions,  i!=j, k!=l), "max") %>%
+
+  # Add constraints
+  # Constraint (8)
+  add_constraint(2 * y[i, j, l, k] <= x[i, k] + x[j, l], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions, i!=j, k!=l) %>%
+  
+  # Constraint (9)
+  add_constraint(sum_over(x[i, k], i=1:num_items) == 1, k=1:num_positions) %>%
+  
+  # Constraint (10)
+  add_constraint(sum_over(x[i, k], k=1:num_positions) == 1, i=1:num_items)
+
+# Solve the model
+result1 <- solve_model(model, with_ROI(solver = "glpk", verbose = TRUE))
+
+# Check results
+solution_x1 <- get_solution(result, x[i, k])
+solution_y1 <- get_solution(result, y[i, j, l, k])
+```
+
+### 2) Maximising the total distance between products that are weakly correlated
+
+We want to maximise the total distance such that pairs with lower confidence values are closer to each other.
+
+$$
+\begin{align*}
+\text{maximise} \quad & \sum_{ijlk} y_{ijlk}d_{k}{1/c_{ij}} \\
+\text{s.t.} \quad & 2y_{ijlk} \leq x_{ik} + x_{jl}, & \forall i, j, l, k \\
+& \sum_{i} x_{ik} = 1, & \forall k \\
+& \sum_{k} x_{ik} = 1, & \forall i \\
+& y_{ijlk} \in \{0, 1\}, x_{ik} \in \{0, 1\}.
+\end{align*}
+$$
+
+```{r}
+# assign a small value to the diagonal of the confidence_matrix
+diag(confidence_matrix) <- 10
+
+num_items <- nrow(confidence_matrix) # Number of products
+num_positions <- nrow(d_matrix_revised) # Number of positions
+
+model <- MIPModel() %>%
+  # Add decision variables
+  add_variable(x[i, k], i=1:num_items, k=1:num_positions, type="binary") %>%
+  add_variable(y[i, j, l, k], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions, i!=j, k!=l, type="binary") %>%
+
+  # Set the objective function (example form, adjust based on your problem's specifics)
+  set_objective(sum_over(y[i, j, l, k] * d_matrix_revised[k, l] *1/confidence_matrix[i, j], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions,  i!=j, k!=l), "max") %>%
+
+  # Add constraints
+  # Constraint (8)
+  add_constraint(2 * y[i, j, l, k] <= x[i, k] + x[j, l], i=1:num_items, j=1:num_items, l=1:num_positions, k=1:num_positions, i!=j, k!=l) %>%
+  
+  # Constraint (9)
+  add_constraint(sum_over(x[i, k], i=1:num_items) == 1, k=1:num_positions) %>%
+  
+  # Constraint (10)
+  add_constraint(sum_over(x[i, k], k=1:num_positions) == 1, i=1:num_items)
+
+# Solve the model
+result2 <- solve_model(model, with_ROI(solver = "glpk", verbose = TRUE))
+
+# Check results
+solution_x2 <- get_solution(result, x[i, k])
+solution_y2 <- get_solution(result, y[i, j, l, k])
+
+```
+
+## Discussion
+
+In this project, I used the **GLPK (GNU Linear Programming Kit)** solver, which applies the simplex method, among others, to solve linear programming problems precisely.
+
+When considering the impact of problem modifications on the optimal solution or value:
+
+1\) The introduction of a new decision variable may alter the optimal solution. If the new variable helps achieve a better objective function value while still satisfying all constraints, the optimal outcome could shift. This also increases computational complexity, as the number of yijkl combinations would grow to (i+1)×(j+1)×(k+1)×(l+1), thus increasing the time required to solve the problem.
+
+2\) If a new constraint is introduced, the feasible region typically becomes smaller. This can make the current optimal solution infeasible, necessitating a search for a new optimal solution that fits within the updated, more restrictive constraints.
+
+3\) A change to a coefficient in the objective function modifies the contribution of each variable to the total objective value. As a result, the optimal solution could shift, especially if the change alters the relative attractiveness of feasible alternatives.
+
+4\) Adjusting a coefficient on the right-hand side of a constraint either tightens or loosens the constraint. This affects the size of the feasible region, which in turn might influence the location of the optimal solution.
+
+5\) When multiple coefficients in the objective function and/or constraints are changed simultaneously, the effect becomes more complex. These changes can significantly reshape the feasible region and the behavior of the objective function, possibly resulting in a completely new optimal solution.
+
+## Limitation and Future Work
+
+Here are some limitations of this project:
+
+1.  The time taken to solve the problem can be significant, especially as the number of products and potential layouts increases.
+
+2.  The current model may not scale efficiently to very large supermarkets with thousands of products. This could lead to intractable computation times or memory issues.
+
+3.  Supermarket inventory and layout preferences may change frequently. The static nature of the current model doesn't account for the dynamic changes in inventory, seasonal products, or customer preferences.
+
+4.  The current model might be tailored to a specific supermarket's layout and may not generalize well to other supermarkets with different sizes, customer demographics, or product ranges.
+
+5.  The model may not fully capture the complexities of customer behavior, which includes impulse buying, the influence of sales and promotions, or the impact of store atmospherics
+
+## Future work:
+
+1.  We can try heuristic or parallel computing to reduce the computing time
+
+2.  Create a dynamic model that can update the layout periodically based on real-time data.
+
+3.  Integrate machine learning to predict changes in customer behavior and adjust the layout accordingly.
+
+#### References
+
+*Bermudez, J., Apolinario, K., & Abad, A. G. (2016). Layout optimization and promotional strategies design in a retail store based on a market basket analysis. In 14th LACCEI International Multi-Conference for Engineering, Education, and Technology.*
+
+*Hui, S. K., Inman, J. J., Huang, Y., & Suher, J. (2013). The effect of in-store travel distance on unplanned spending: Applications to mobile promotion strategies. Journal of Marketing, 77(2), 1-16.*
